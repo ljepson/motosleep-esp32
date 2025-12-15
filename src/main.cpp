@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <PubSubClient.h>
 #include <BLEDevice.h>
 #include <BLEScan.h>
@@ -188,50 +189,65 @@ void printWiFiStatus(wl_status_t status) {
 
 void setupWiFi() {
     Serial.printf("[WiFi] Connecting to: %s\n", WIFI_SSID);
+    Serial.printf("[WiFi] Password length: %d\n", strlen(WIFI_PASSWORD));
 
-    // Disconnect and clear any previous connection
-    WiFi.disconnect(true);
+    // Full reset of WiFi
+    WiFi.disconnect(true, true);  // Disconnect and erase credentials
+    WiFi.mode(WIFI_OFF);
     delay(1000);
 
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
 
-    // Some routers need longer auth timeout
-    // WiFi.setTxPower(WIFI_POWER_19_5dBm);  // Max power
+    // Try to improve compatibility
+    esp_wifi_set_ps(WIFI_PS_NONE);  // Disable power saving for more reliable connection
 
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    int retryCount = 0;
+    const int maxRetries = 3;
 
-    int attempts = 0;
-    wl_status_t lastStatus = WL_IDLE_STATUS;
+    while (retryCount < maxRetries) {
+        Serial.printf("[WiFi] Attempt %d of %d\n", retryCount + 1, maxRetries);
 
-    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
-        delay(500);
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-        wl_status_t currentStatus = WiFi.status();
-        if (currentStatus != lastStatus) {
-            Serial.print("\n[WiFi] Status: ");
-            printWiFiStatus(currentStatus);
-            lastStatus = currentStatus;
-        } else {
-            Serial.print(".");
+        int attempts = 0;
+        wl_status_t lastStatus = WL_IDLE_STATUS;
+
+        while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+            delay(500);
+
+            wl_status_t currentStatus = WiFi.status();
+            if (currentStatus != lastStatus) {
+                Serial.print("\n[WiFi] Status: ");
+                printWiFiStatus(currentStatus);
+                lastStatus = currentStatus;
+            } else {
+                Serial.print(".");
+            }
+            attempts++;
         }
-        attempts++;
-    }
+        Serial.println();
 
-    Serial.println();
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.printf("[WiFi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+            Serial.printf("[WiFi] RSSI: %d dBm\n", WiFi.RSSI());
+            Serial.printf("[WiFi] Channel: %d\n", WiFi.channel());
+            Serial.printf("[WiFi] MAC: %s\n", WiFi.macAddress().c_str());
+            return;
+        }
 
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf("[WiFi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
-        Serial.printf("[WiFi] RSSI: %d dBm\n", WiFi.RSSI());
-        Serial.printf("[WiFi] Channel: %d\n", WiFi.channel());
-    } else {
-        Serial.print("[WiFi] Failed to connect. Final status: ");
+        Serial.print("[WiFi] Attempt failed. Status: ");
         printWiFiStatus(WiFi.status());
         Serial.println();
-        Serial.println("[WiFi] Restarting in 5 seconds...");
-        delay(5000);
-        ESP.restart();
+
+        WiFi.disconnect(true);
+        delay(2000);
+        retryCount++;
     }
+
+    Serial.println("[WiFi] All attempts failed. Restarting in 10 seconds...");
+    delay(10000);
+    ESP.restart();
 }
 
 // =============================================================================
