@@ -173,24 +173,63 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 // =============================================================================
 // WiFi Setup
 // =============================================================================
+void printWiFiStatus(wl_status_t status) {
+    switch(status) {
+        case WL_IDLE_STATUS: Serial.print("IDLE"); break;
+        case WL_NO_SSID_AVAIL: Serial.print("NO_SSID_AVAIL"); break;
+        case WL_SCAN_COMPLETED: Serial.print("SCAN_COMPLETED"); break;
+        case WL_CONNECTED: Serial.print("CONNECTED"); break;
+        case WL_CONNECT_FAILED: Serial.print("CONNECT_FAILED"); break;
+        case WL_CONNECTION_LOST: Serial.print("CONNECTION_LOST"); break;
+        case WL_DISCONNECTED: Serial.print("DISCONNECTED"); break;
+        default: Serial.printf("UNKNOWN(%d)", status); break;
+    }
+}
+
 void setupWiFi() {
-    Serial.println("[WiFi] Connecting...");
+    Serial.printf("[WiFi] Connecting to: %s\n", WIFI_SSID);
+
+    // Disconnect and clear any previous connection
+    WiFi.disconnect(true);
+    delay(1000);
+
     WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
+
+    // Some routers need longer auth timeout
+    // WiFi.setTxPower(WIFI_POWER_19_5dBm);  // Max power
+
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 60) {
+    wl_status_t lastStatus = WL_IDLE_STATUS;
+
+    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
         delay(500);
-        Serial.print(".");
+
+        wl_status_t currentStatus = WiFi.status();
+        if (currentStatus != lastStatus) {
+            Serial.print("\n[WiFi] Status: ");
+            printWiFiStatus(currentStatus);
+            lastStatus = currentStatus;
+        } else {
+            Serial.print(".");
+        }
         attempts++;
     }
 
+    Serial.println();
+
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.println();
         Serial.printf("[WiFi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("[WiFi] RSSI: %d dBm\n", WiFi.RSSI());
+        Serial.printf("[WiFi] Channel: %d\n", WiFi.channel());
     } else {
+        Serial.print("[WiFi] Failed to connect. Final status: ");
+        printWiFiStatus(WiFi.status());
         Serial.println();
-        Serial.println("[WiFi] Failed to connect, restarting...");
+        Serial.println("[WiFi] Restarting in 5 seconds...");
+        delay(5000);
         ESP.restart();
     }
 }
