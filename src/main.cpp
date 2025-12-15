@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
+#include <esp_mac.h>
 #include <PubSubClient.h>
 #include <BLEDevice.h>
 #include <BLEScan.h>
@@ -172,6 +173,33 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 
 // =============================================================================
+// WiFi Event Handler
+// =============================================================================
+void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+    Serial.printf("[WiFi Event] ");
+    switch(event) {
+        case ARDUINO_EVENT_WIFI_STA_START:
+            Serial.println("STA Started");
+            break;
+        case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+            Serial.println("Connected to AP");
+            break;
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+            Serial.printf("Disconnected. Reason: %d\n", info.wifi_sta_disconnected.reason);
+            break;
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+            Serial.printf("Got IP: %s\n", IPAddress(info.got_ip.ip_info.ip.addr).toString().c_str());
+            break;
+        case ARDUINO_EVENT_WIFI_STA_LOST_IP:
+            Serial.println("Lost IP");
+            break;
+        default:
+            Serial.printf("Event: %d\n", event);
+            break;
+    }
+}
+
+// =============================================================================
 // WiFi Setup
 // =============================================================================
 void printWiFiStatus(wl_status_t status) {
@@ -187,66 +215,82 @@ void printWiFiStatus(wl_status_t status) {
     }
 }
 
+// Static IP configuration - set USE_STATIC_IP to true and configure addresses
+#define USE_STATIC_IP true
+#define STATIC_IP      192, 168, 1, 200   // Change to match your network
+#define STATIC_GATEWAY 192, 168, 1, 1     // Your router IP
+#define STATIC_SUBNET  255, 255, 255, 0
+#define STATIC_DNS     8, 8, 8, 8         // Google DNS
+
 void setupWiFi() {
     Serial.printf("[WiFi] Connecting to: %s\n", WIFI_SSID);
     Serial.printf("[WiFi] Password length: %d\n", strlen(WIFI_PASSWORD));
 
-    // Full reset of WiFi
-    WiFi.disconnect(true, true);  // Disconnect and erase credentials
-    WiFi.mode(WIFI_OFF);
-    delay(1000);
+    // Register event handler first
+    WiFi.onEvent(onWiFiEvent);
 
+    // Initialize WiFi
     WiFi.mode(WIFI_STA);
-    WiFi.setAutoReconnect(true);
+    delay(100);
 
-    // Try to improve compatibility
-    esp_wifi_set_ps(WIFI_PS_NONE);  // Disable power saving for more reliable connection
+    // Now read MAC (after WiFi is initialized)
+    Serial.printf("[WiFi] ESP32 MAC: %s\n", WiFi.macAddress().c_str());
 
-    int retryCount = 0;
-    const int maxRetries = 3;
+    #if USE_STATIC_IP
+    IPAddress staticIP(STATIC_IP);
+    IPAddress gateway(STATIC_GATEWAY);
+    IPAddress subnet(STATIC_SUBNET);
+    IPAddress dns(STATIC_DNS);
 
-    while (retryCount < maxRetries) {
-        Serial.printf("[WiFi] Attempt %d of %d\n", retryCount + 1, maxRetries);
+    Serial.printf("[WiFi] Using static IP: %s\n", staticIP.toString().c_str());
+    if (!WiFi.config(staticIP, gateway, subnet, dns)) {
+        Serial.println("[WiFi] Static IP config failed!");
+    }
+    #else
+    Serial.println("[WiFi] Using DHCP");
+    #endif
+
+    // Disable power saving
+    esp_wifi_set_ps(WIFI_PS_NONE);
+
+    for (int retry = 1; retry <= 3; retry++) {
+        Serial.printf("\n[WiFi] Attempt %d of 3\n", retry);
 
         WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-        int attempts = 0;
-        wl_status_t lastStatus = WL_IDLE_STATUS;
-
-        while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+        // Wait up to 20 seconds for connection (DHCP can be slow)
+        unsigned long startTime = millis();
+        while (WiFi.status() != WL_CONNECTED && (millis() - startTime) < 20000) {
             delay(500);
+            Serial.print(".");
 
-            wl_status_t currentStatus = WiFi.status();
-            if (currentStatus != lastStatus) {
-                Serial.print("\n[WiFi] Status: ");
-                printWiFiStatus(currentStatus);
-                lastStatus = currentStatus;
-            } else {
-                Serial.print(".");
+            // Check if we got an IP even if status doesn't update
+            if (WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
+                Serial.println("\n[WiFi] Got IP!");
+                break;
             }
-            attempts++;
         }
         Serial.println();
 
-        if (WiFi.status() == WL_CONNECTED) {
-            Serial.printf("[WiFi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+        if (WiFi.status() == WL_CONNECTED || WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
+            Serial.println("[WiFi] SUCCESS!");
+            Serial.printf("[WiFi] IP: %s\n", WiFi.localIP().toString().c_str());
+            Serial.printf("[WiFi] Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
             Serial.printf("[WiFi] RSSI: %d dBm\n", WiFi.RSSI());
-            Serial.printf("[WiFi] Channel: %d\n", WiFi.channel());
             Serial.printf("[WiFi] MAC: %s\n", WiFi.macAddress().c_str());
             return;
         }
 
-        Serial.print("[WiFi] Attempt failed. Status: ");
+        Serial.printf("[WiFi] Failed. Status: ");
         printWiFiStatus(WiFi.status());
-        Serial.println();
+        Serial.printf(" | IP: %s\n", WiFi.localIP().toString().c_str());
 
         WiFi.disconnect(true);
-        delay(2000);
-        retryCount++;
+        delay(3000);
     }
 
-    Serial.println("[WiFi] All attempts failed. Restarting in 10 seconds...");
-    delay(10000);
+    Serial.println("[WiFi] All attempts failed. Restarting...");
+    delay(5000);
     ESP.restart();
 }
 
